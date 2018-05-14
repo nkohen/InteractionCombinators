@@ -9,8 +9,8 @@ Note: this project depends on my Regex project (https://github.com/nkohen/Regex)
 
 Compilation Instructions:
 1) Download this repo
-2) Open a terminal in side the src directory
-3) "javac Regex\*.java"
+2) Open a terminal inside the src directory
+3) "javac Regex\\*.java"
 4) "cd FourCombinatorImplementation"
 5) "javac -cp .. Cell.java InteractionNet.java LambdaNet.java Port.java Term.java Wire.java"
 6) "cd ..\FullParallelReduction"
