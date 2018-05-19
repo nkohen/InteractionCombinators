@@ -49,4 +49,12 @@ public class Cell {
     public static Cell makeCell(Symbol symbol) {
         return new Cell(symbol, (symbol == Symbol.EPS));
     }
+
+    public boolean isLambda() {
+        return symbol == Symbol.GAM && left.name != null;
+    }
+
+    public boolean isApplication() {
+        return symbol == Symbol.GAM && left.name == null;
+    }
 }

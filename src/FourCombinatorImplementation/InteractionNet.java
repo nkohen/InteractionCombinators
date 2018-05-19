@@ -7,67 +7,141 @@ public class InteractionNet {
     static Queue<Wire> cuts = new LinkedList<>();
     static Set<Cell> deltaPrimes = new HashSet<>();
 
+    private static int num = 0;
+
+    public InteractionNet() {}
+
+    private InteractionNet(Port handle) {
+        this.handle = handle;
+    }
+
     void linkToNet(Port port, InteractionNet net) {
         Wire.link(port, net.handle.getLinkedPort());
+    }
+
+    void normalize() {
+        while (!cuts.isEmpty()) {
+            Set<Wire> possibleCuts = cuts.poll().reduce();
+
+            // Bypass extra Ports and remove duplicate Wires
+            possibleCuts = Wire.fixExtra(possibleCuts);
+
+            for (Wire wire : possibleCuts) {
+                if (wire.isCut()) {
+                    cuts.add(wire);
+                }
+            }
+
+            // This is a short-term hack to be replaced
+            num++;
+            if (num >= 100000) { // Every 10000 reduction steps, do garbage collection to remove deleted parts
+                num = 0;
+                purge();
+            }
+        }
     }
 
     // TODO: On deletion, traverse the tree to be deleted and remove from cuts and deltaPrimes
     /*
      * To reduce:
-     * Reduce each cut and add to the Queue newly created cuts until the queue is empty
-     * Then if there are Cells with symbol DEL_PRIME that point to aux ports of Gammas, force duplication
+     * Reduce each cut and add to the Queue newly created cuts until the queue is empty (normalize)
+     * Then if there are Cells with symbol DEL_PRIME that point to right ports of Gammas, force duplication
      * Repeat until there are no cuts and no DEL_PRIMEs (except for those pointing at free ports)
+     *
+     * Actually some more complicated stuff happening now, will update my write-up soon
      */
     void reduce() {
-        int num = 0;
-        do {
-            Set<Cell> needsDelta = new HashSet<>();
-            for (Cell deltaPrime : deltaPrimes) {
-                if (deltaPrime.principal.getLinkedPort().cell.symbol == Cell.Symbol.GAM)
-                    needsDelta.add(deltaPrime.principal.getLinkedPort().cell);
+        normalize();
+        if (deltaPrimes.isEmpty())
+            return;
+
+        Cell top = handle.getLinkedPort().cell;
+        if (top == null)
+            return;
+
+        if (top.symbol == Cell.Symbol.GAM && handle.getLinkedPort().port == Port.PRINCIPAL) {
+            new InteractionNet(top.right).reduce();
+        } else if (top.isApplication()) { // should only come from right??? I think
+            // This is where multi-threading can happen for fixing?
+            new InteractionNet(top.principal).reduce();
+            if (handle.port == Port.PRINCIPAL && handle.cell.symbol == Cell.Symbol.DEL_PRIME &&
+                    handle.getLinkedPort().port == Port.LEFT)
+                new InteractionNet(top.left).reduce();
+        } else if (top.symbol == Cell.Symbol.DEL) { // This is doing too much work? optimize here
+            new InteractionNet(top.principal).reduce();
+        } else if (top.symbol == Cell.Symbol.DEL_PRIME) { // This is doing too much work? optimize here
+            new InteractionNet(top.principal).reduce();
+            if (top.principal.cell != top) { // This means the cell has been changed to a DEL
+                return;
             }
-            for (Cell cell : needsDelta) { // Force Duplication of Gammas
-                insertDeltas(cell);
+            Cell next = top.principal.getLinkedPort().cell;
+            if (next == null || next.isLambda()) {
+                removePrime(top); // This could change cells above it
+            } else if (next.isApplication() && top.principal.getLinkedPort().port == Port.RIGHT) {
+                forceDup(top);
+                new InteractionNet(handle.getLinkedPort().cell.principal).reduce();
+                new InteractionNet(handle.getLinkedPort().cell.left).reduce();
+            } else if (next.symbol == Cell.Symbol.DEL) {
+                changeSymbol(next, Cell.Symbol.DEL_PRIME);
+                reduce();
             }
-
-            while (!cuts.isEmpty()) { // Normalize
-                Set<Wire> possibleCuts = cuts.poll().reduce();
-
-                // Bypass extra Ports and remove duplicate Wires
-                possibleCuts = Wire.fixExtra(possibleCuts);
-
-                for (Wire wire : possibleCuts) {
-                    if (wire.isCut()) {
-                        cuts.add(wire);
-                    }
-                }
-
-                // This is a short-term hack to be replaced
-                num++;
-                if (num == 100000) { // Every 10000 reduction steps, do garbage collection to remove deleted parts
-                    num = 0;
-                    purge();
-                }
-            }
-
-            // Remove from deltaPrimes Cells pointing to free ports
-            deltaPrimes.removeIf(deltaPrime -> deltaPrime.principal.getLinkedPort().cell == null);
-        } while (!deltaPrimes.isEmpty());
+        }
     }
 
-    // Inserts a DeltaPrime pointing up at cell and a Delta pointing down at what cell was pointing at
-    private void insertDeltas(Cell cell) {
-        Port out = cell.principal.getLinkedPort();
+    private void forceDup(Cell del) {
+        Cell gam = del.principal.getLinkedPort().cell;
 
-        Cell delta = Cell.makeDelta();
-        Cell deltaPrime = Cell.makeDeltaPrime();
-        Wire.link(delta.left, deltaPrime.right);
-        Wire.link(delta.right, deltaPrime.left);
+        Cell gamL = Cell.makeGamma();
+        Cell gamR = Cell.makeGamma();
+        Cell delL = Cell.makeDeltaPrime();
+        Cell delR = Cell.makeDeltaPrime();
 
-        Wire.link(out, delta.principal);
-        Wire cut = Wire.link(cell.principal, deltaPrime.principal);
+        Wire.link(gamL.right, del.right.getLinkedPort());
+        Wire.link(gamL.left, delR.right);
+        Wire.link(gamL.principal, delL.right);
+        Wire.link(gamR.right, del.left.getLinkedPort());
+        Wire.link(gamR.left, delR.left);
+        Wire.link(gamR.principal, delL.left);
+        Wire.link(delL.principal, gam.principal.getLinkedPort());
+        Wire.link(delR.principal, gam.left.getLinkedPort());
 
-        cuts.add(cut);
+        deltaPrimes.remove(del);
+        deltaPrimes.add(delL);
+        deltaPrimes.add(delR);
+
+        if (delL.principal.link.isCut())
+            cuts.add(delL.principal.link);
+        if (delR.principal.link.isCut())
+            cuts.add(delR.principal.link);
+    }
+
+    private void changeSymbol(Cell cell, Cell.Symbol symbol) {
+        Cell newCell = Cell.makeCell(symbol);
+
+        newCell.principal = cell.principal;
+        cell.principal.cell = newCell;
+
+        newCell.left = cell.left;
+        cell.left.cell = newCell;
+
+        newCell.right = cell.right;
+        cell.right.cell = newCell;
+
+        if (cell.symbol == Cell.Symbol.DEL_PRIME)
+            deltaPrimes.remove(cell);
+        if (symbol == Cell.Symbol.DEL_PRIME)
+            deltaPrimes.add(newCell);
+    }
+
+    private void removePrime(Cell delPrime) {
+        changeSymbol(delPrime, Cell.Symbol.DEL);
+
+        if (delPrime.left.getLinkedPort().cell != null &&
+                delPrime.left.getLinkedPort().cell.symbol == Cell.Symbol.DEL_PRIME)
+            removePrime(delPrime.left.getLinkedPort().cell);
+        if (delPrime.right.getLinkedPort().cell != null &&
+                delPrime.right.getLinkedPort().cell.symbol == Cell.Symbol.DEL_PRIME)
+            removePrime(delPrime.right.getLinkedPort().cell);
     }
 
     // Do garbage collection: remove pointers to all that cannot be reached from handle

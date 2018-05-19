@@ -68,6 +68,11 @@ public class FunctionalTest {
     }
 
     @Test
+    public void duplicatingLazyDel() {
+        assertReduces("L x . x (L y . (x x) (x x)) (L y . (x x) (x x))", "L x . (L y . x y y) (L y . (L z . z z) (x x))");
+    }
+
+    @Test
     public void deletionTest() {
         assertReduces("y", "(L x . y) z");
         assertReduces("y", "(L x . y) ((L x . x x) (L x . x))");
